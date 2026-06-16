@@ -1,0 +1,18 @@
+name: e_archive_server
+description: Dart HTTP API for E-Archive (SQLite database).
+publish_to: "none"
+version: 1.0.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  crypto: ^3.0.6
+  path: ^1.9.0
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+  sqflite_common: ^2.5.4
+  sqflite_common_ffi: ^2.3.4
+
+dev_dependencies:
+  lints: ^5.0.0
