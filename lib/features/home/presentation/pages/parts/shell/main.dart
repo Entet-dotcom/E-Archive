@@ -71,7 +71,7 @@ class _DashboardShellPageState extends State<DashboardShellPage> {
   _AnalyticsData? _cachedFullAnalytics;
   int _fullAnalyticsCacheGeneration = -1;
   bool _fullAnalyticsLoading = false;
-  _ComplianceDashboardData? _cachedCompliance;
+  Widget? _complianceHubPage;
   final Map<String, List<_AnalyticsGraduate>> _graduatesByYearCache = {};
   final Map<String, List<_CourseCount>> _courseCountsByYearCache = {};
   late final List<_SidebarNavSection> _navSections;
@@ -96,7 +96,6 @@ class _DashboardShellPageState extends State<DashboardShellPage> {
     _loadDashboardPriorityData();
     _loadSecondaryShellData();
     _loadAuditLogs();
-    if (_isAdmin) _loadComplianceSnapshot();
   }
 
   bool get _isDashboardLoading =>
@@ -433,7 +432,6 @@ class _DashboardShellPageState extends State<DashboardShellPage> {
             : null,
         analytics: prepared.analytics,
         showAnalyticsCharts: _dashboardAnalyticsReady,
-        compliance: _cachedCompliance,
       );
 
       if (_studentsLoadError != null) {
@@ -595,11 +593,12 @@ class _DashboardShellPageState extends State<DashboardShellPage> {
       return _AuditLogPage(rows: _audit);
     }
     if (_selectedNavId == 'compliance_hub') {
-      return _ComplianceHubPage(
+      _complianceHubPage ??= _ComplianceHubPage(
         isAdmin: _isAdmin,
         accountName: widget.accountName,
         initialTab: 0,
       );
+      return _complianceHubPage!;
     }
     if (_selectedNavId == 'data_analytics') {
       if (_analyticsGraduatesYear != null) {
@@ -849,40 +848,6 @@ class _DashboardShellPageState extends State<DashboardShellPage> {
     final name = student.trim();
     if (name.isEmpty) return;
     _openArchivedDocuments(studentFilter: name);
-  }
-
-  Future<void> _loadComplianceSnapshot() async {
-    try {
-      final overview = await _database.fetchComplianceOverview();
-      final analytics = await _database.fetchComplianceAnalytics();
-      final decisionsRaw = (analytics['decisions'] as List?) ?? [];
-      final decisions = decisionsRaw.map((d) {
-        final map = Map<String, dynamic>.from(d as Map);
-        return _ComplianceDecisionRow(
-          priority: '${map['priority'] ?? 'low'}',
-          title: '${map['title'] ?? ''}',
-          detail: '${map['detail'] ?? ''}',
-        );
-      }).toList();
-
-      if (!mounted) return;
-      setState(() {
-        _cachedCompliance = _ComplianceDashboardData(
-          retentionActive: (overview['retention_active'] as num?)?.toInt() ?? 0,
-          retentionExpired: (overview['retention_expired'] as num?)?.toInt() ?? 0,
-          duplicateGroups: (overview['duplicate_groups'] as num?)?.toInt() ?? 0,
-          disposalPending: (overview['disposal_pending'] as num?)?.toInt() ?? 0,
-          privacyScore: (overview['privacy_score'] as num?)?.toInt() ?? 0,
-          isoScore: (overview['iso_score'] as num?)?.toInt() ?? 0,
-          backupCount: (overview['backup_count'] as num?)?.toInt() ?? 0,
-          decisionCount: decisions.length,
-          lastBackup: overview['last_backup']?.toString(),
-          decisions: decisions,
-        );
-      });
-    } catch (_) {
-      // Compliance API optional until server restarts with v9 migration.
-    }
   }
 
   Future<void> _loadAuditLogs() async {

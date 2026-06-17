@@ -49,22 +49,10 @@ class _AdminDashboardBody extends StatelessWidget {
           analyticsSection = const _DashboardAnalyticsRowSkeleton();
         }
 
-        final complianceInsights = data.compliance != null &&
-                data.compliance!.decisions.isNotEmpty
-            ? _AdminDashboardComplianceInsights(
-                compliance: data.compliance!,
-                onNavigate: data.onNavigate,
-              )
-            : null;
-
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(child: mainPanels),
-            if (complianceInsights != null) ...[
-              const SizedBox(height: _AdminDashTheme.panelGap),
-              complianceInsights,
-            ],
             const SizedBox(height: _AdminDashTheme.panelGap),
             analyticsSection,
           ],

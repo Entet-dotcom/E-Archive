@@ -273,12 +273,119 @@ class _ComplianceHubPage extends StatefulWidget {
   State<_ComplianceHubPage> createState() => _ComplianceHubPageState();
 }
 
+class _ComplianceHubSnapshot {
+  const _ComplianceHubSnapshot({
+    required this.overview,
+    required this.retention,
+    required this.policies,
+    required this.accessRules,
+    required this.duplicates,
+    required this.analytics,
+    required this.backups,
+    required this.privacy,
+    required this.disposal,
+    required this.iso,
+  });
+
+  final Map<String, Object?> overview;
+  final List<Map<String, Object?>> retention;
+  final List<Map<String, Object?>> policies;
+  final List<Map<String, Object?>> accessRules;
+  final List<Map<String, Object?>> duplicates;
+  final Map<String, Object?> analytics;
+  final List<Map<String, Object?>> backups;
+  final Map<String, Object?> privacy;
+  final List<Map<String, Object?>> disposal;
+  final Map<String, Object?> iso;
+}
+
+class _ComplianceTabLoading extends StatelessWidget {
+  const _ComplianceTabLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Loading module data…',
+            style: _AdminDashTheme.label().copyWith(color: _AdminDashTheme.textMuted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComplianceMetricsSkeleton extends StatelessWidget {
+  const _ComplianceMetricsSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return SkeletonPulseScope(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cardWidth = constraints.maxWidth < 1200
+              ? (constraints.maxWidth - _AdminDashTheme.statSpacing) / 2
+              : (constraints.maxWidth - (5 * _AdminDashTheme.statSpacing)) / 6;
+          return Wrap(
+            spacing: _AdminDashTheme.statSpacing,
+            runSpacing: _AdminDashTheme.statSpacing,
+            children: [
+              for (var i = 0; i < 6; i++)
+                SkeletonBox(
+                  width: cardWidth.clamp(140, 220),
+                  height: 92,
+                  borderRadius: 14,
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Keeps each tab's scroll position and avoids rebuild when switching tabs.
+class _KeepAliveComplianceTab extends StatefulWidget {
+  const _KeepAliveComplianceTab({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_KeepAliveComplianceTab> createState() => _KeepAliveComplianceTabState();
+}
+
+class _KeepAliveComplianceTabState extends State<_KeepAliveComplianceTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+}
+
 class _ComplianceHubPageState extends State<_ComplianceHubPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
+  static _ComplianceHubSnapshot? _memoryCache;
+
   final _db = AppDatabase.instance;
   late TabController _tabs;
-  bool _loading = true;
+  bool _overviewLoading = true;
+  bool _detailsLoading = false;
+  bool _refreshing = false;
   String? _error;
+  List<Widget>? _cachedTabBodies;
 
   Map<String, Object?> _overview = {};
   List<Map<String, Object?>> _retention = [];
@@ -290,6 +397,17 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
   Map<String, Object?> _privacy = {};
   List<Map<String, Object?>> _disposal = [];
   Map<String, Object?> _iso = {};
+
+  bool get _hasDetails =>
+      _retention.isNotEmpty ||
+      _policies.isNotEmpty ||
+      _accessRules.isNotEmpty ||
+      _duplicates.isNotEmpty ||
+      _analytics.isNotEmpty ||
+      _backups.isNotEmpty ||
+      _privacy.isNotEmpty ||
+      _disposal.isNotEmpty ||
+      _iso.isNotEmpty;
 
   static const _tabLabels = [
     'Overview',
@@ -307,21 +425,191 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
   void initState() {
     super.initState();
     final tab = widget.initialTab.clamp(0, _tabLabels.length - 1);
-    _tabs = TabController(length: _tabLabels.length, vsync: this, initialIndex: tab);
-    _loadAll();
+    _tabs = TabController(
+      length: _tabLabels.length,
+      vsync: this,
+      initialIndex: tab,
+      animationDuration: const Duration(milliseconds: 220),
+    );
+    _tabs.addListener(_onTabIndexChanged);
+    final cached = _memoryCache;
+    if (cached != null) {
+      _applySnapshot(cached);
+      _overviewLoading = false;
+      _rebuildCachedTabs();
+      unawaited(_refreshInBackground());
+    } else {
+      unawaited(_loadOverviewFirst());
+    }
+  }
+
+  void _applySnapshot(_ComplianceHubSnapshot snapshot) {
+    _overview = snapshot.overview;
+    _retention = snapshot.retention;
+    _policies = snapshot.policies;
+    _accessRules = snapshot.accessRules;
+    _duplicates = snapshot.duplicates;
+    _analytics = snapshot.analytics;
+    _backups = snapshot.backups;
+    _privacy = snapshot.privacy;
+    _disposal = snapshot.disposal;
+    _iso = snapshot.iso;
+  }
+
+  _ComplianceHubSnapshot _createSnapshot() {
+    return _ComplianceHubSnapshot(
+      overview: _overview,
+      retention: _retention,
+      policies: _policies,
+      accessRules: _accessRules,
+      duplicates: _duplicates,
+      analytics: _analytics,
+      backups: _backups,
+      privacy: _privacy,
+      disposal: _disposal,
+      iso: _iso,
+    );
+  }
+
+  void _saveSnapshot() {
+    _memoryCache = _createSnapshot();
+  }
+
+  void _onTabIndexChanged() {
+    if (_tabs.indexIsChanging) return;
+    setState(() {});
   }
 
   @override
   void dispose() {
+    _tabs.removeListener(_onTabIndexChanged);
     _tabs.dispose();
     super.dispose();
   }
 
-  Future<void> _loadAll() async {
+  void _rebuildCachedTabs() {
+    Widget tabBody(int index, Widget child) {
+      if (index > 0 && !_hasDetails && _detailsLoading) {
+        return const _ComplianceTabLoading();
+      }
+      return child;
+    }
+
+    _cachedTabBodies = [
+      _KeepAliveComplianceTab(
+        child: tabBody(0, _ComplianceOverviewTab(overview: _overview)),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(
+          1,
+          _RetentionTab(records: _retention, policies: _policies),
+        ),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(2, _AccessRulesTab(rules: _accessRules)),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(3, _DuplicatesTab(groups: _duplicates)),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(4, _ComplianceAnalyticsTab(data: _analytics)),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(
+          5,
+          _BackupTab(
+            backups: _backups,
+            isAdmin: widget.isAdmin,
+            onBackup: _runBackup,
+            onRestore: _runRestore,
+          ),
+        ),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(6, _PrivacyTab(data: _privacy)),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(
+          7,
+          _DisposalTab(
+            items: _disposal,
+            isAdmin: widget.isAdmin,
+            onApprove: _approveDisposal,
+          ),
+        ),
+      ),
+      _KeepAliveComplianceTab(
+        child: tabBody(8, _IsoTab(data: _iso)),
+      ),
+    ];
+  }
+
+  Future<void> _loadOverviewFirst() async {
+    if (!mounted) return;
     setState(() {
-      _loading = true;
+      _overviewLoading = true;
       _error = null;
     });
+    try {
+      final overview = await _db.fetchComplianceOverview();
+      if (!mounted) return;
+      setState(() {
+        _overview = overview;
+        _overviewLoading = false;
+        _rebuildCachedTabs();
+      });
+      unawaited(_loadDetailsInBackground());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _overviewLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadDetailsInBackground() async {
+    if (!mounted) return;
+    setState(() => _detailsLoading = true);
+    try {
+      final results = await Future.wait([
+        _db.fetchRetentionMonitoring(),
+        _db.fetchRetentionPolicies(),
+        _db.fetchAccessRules(),
+        _db.fetchDuplicateGroups(),
+        _db.fetchComplianceAnalytics(),
+        _db.fetchBackups(),
+        _db.fetchPrivacyCompliance(),
+        _db.fetchDisposalRecommendations(),
+        _db.fetchIsoCompliance(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _retention = (results[0] as List).cast<Map<String, Object?>>();
+        _policies = (results[1] as List).cast<Map<String, Object?>>();
+        _accessRules = (results[2] as List).cast<Map<String, Object?>>();
+        _duplicates = (results[3] as List).cast<Map<String, Object?>>();
+        _analytics = results[4] as Map<String, Object?>;
+        _backups = (results[5] as List).cast<Map<String, Object?>>();
+        _privacy = results[6] as Map<String, Object?>;
+        _disposal = (results[7] as List).cast<Map<String, Object?>>();
+        _iso = results[8] as Map<String, Object?>;
+        _detailsLoading = false;
+        _rebuildCachedTabs();
+      });
+      _saveSnapshot();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _detailsLoading = false;
+        _error ??= '$e';
+      });
+    }
+  }
+
+  Future<void> _refreshInBackground() async {
+    if (!mounted) return;
+    setState(() => _refreshing = true);
     try {
       final results = await Future.wait([
         _db.fetchComplianceOverview(),
@@ -347,14 +635,13 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
         _privacy = results[7] as Map<String, Object?>;
         _disposal = (results[8] as List).cast<Map<String, Object?>>();
         _iso = results[9] as Map<String, Object?>;
-        _loading = false;
+        _refreshing = false;
+        _rebuildCachedTabs();
       });
-    } catch (e) {
+      _saveSnapshot();
+    } catch (_) {
       if (!mounted) return;
-      setState(() {
-        _error = '$e';
-        _loading = false;
-      });
+      setState(() => _refreshing = false);
     }
   }
 
@@ -365,7 +652,7 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Backup created successfully.')),
       );
-      await _loadAll();
+      await _refreshInBackground();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -395,7 +682,7 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Backup restored. Reload data if needed.')),
       );
-      await _loadAll();
+      await _refreshInBackground();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -411,7 +698,7 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Disposal approved.')),
       );
-      await _loadAll();
+      await _refreshInBackground();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -431,8 +718,16 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
               'Retention monitoring, rule-based access, duplicates, analytics, backup, privacy (RA 10173), disposal, and ISO alignment.',
           trailing: IconButton(
             tooltip: 'Refresh',
-            onPressed: _loading ? null : _loadAll,
-            icon: const Icon(Icons.refresh),
+            onPressed: (_overviewLoading || _refreshing) ? null : () {
+              unawaited(_refreshInBackground());
+            },
+            icon: _refreshing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
           ),
         ),
         if (_error != null)
@@ -449,8 +744,12 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
               style: const TextStyle(color: Color(0xFF9A3412), fontSize: 12),
             ),
           ),
-        if (!_loading) ...[
-          _ComplianceOverviewMetricsRow(overview: _overview),
+        if (_overviewLoading)
+          const _ComplianceMetricsSkeleton()
+        else ...[
+          RepaintBoundary(
+            child: _ComplianceOverviewMetricsRow(overview: _overview),
+          ),
           const SizedBox(height: _AdminDashTheme.sectionGap),
         ],
         Expanded(
@@ -458,58 +757,59 @@ class _ComplianceHubPageState extends State<_ComplianceHubPage>
             compact: true,
             expandChild: true,
             title: 'Compliance Modules',
-            trailing: _loading
+            trailing: _detailsLoading
                 ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : null,
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      TabBar(
-                        controller: _tabs,
-                        isScrollable: true,
-                        labelColor: _AdminDashTheme.link,
-                        unselectedLabelColor: _AdminDashTheme.textMuted,
-                        indicatorColor: _AdminDashTheme.link,
-                        labelStyle: AppFonts.poppins(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        tabs: [for (final label in _tabLabels) Tab(text: label)],
-                      ),
-                      const Divider(height: 1, color: _AdminDashTheme.border),
-                      Expanded(
-                        child: TabBarView(
-                          controller: _tabs,
-                          children: [
-                            _ComplianceOverviewTab(overview: _overview),
-                            _RetentionTab(records: _retention, policies: _policies),
-                            _AccessRulesTab(rules: _accessRules),
-                            _DuplicatesTab(groups: _duplicates),
-                            _ComplianceAnalyticsTab(data: _analytics),
-                            _BackupTab(
-                              backups: _backups,
-                              isAdmin: widget.isAdmin,
-                              onBackup: _runBackup,
-                              onRestore: _runRestore,
-                            ),
-                            _PrivacyTab(data: _privacy),
-                            _DisposalTab(
-                              items: _disposal,
-                              isAdmin: widget.isAdmin,
-                              onApprove: _approveDisposal,
-                            ),
-                            _IsoTab(data: _iso),
-                          ],
-                        ),
-                      ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Material(
+                  color: Colors.transparent,
+                  child: TabBar(
+                    controller: _tabs,
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    splashFactory: NoSplash.splashFactory,
+                    overlayColor: WidgetStateProperty.all(
+                      Colors.transparent,
+                    ),
+                    mouseCursor: SystemMouseCursors.click,
+                    labelColor: _AdminDashTheme.link,
+                    unselectedLabelColor: _AdminDashTheme.textMuted,
+                    indicatorColor: _AdminDashTheme.link,
+                    indicatorSize: TabBarIndicatorSize.label,
+                    dividerColor: Colors.transparent,
+                    labelStyle: AppFonts.poppins(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    unselectedLabelStyle: AppFonts.poppins(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    tabs: [
+                      for (final label in _tabLabels) Tab(text: label),
                     ],
                   ),
+                ),
+                const Divider(height: 1, color: _AdminDashTheme.border),
+                Expanded(
+                  child: ClipRect(
+                    child: _cachedTabBodies == null
+                        ? const _ComplianceTabLoading()
+                        : IndexedStack(
+                            index: _tabs.index,
+                            sizing: StackFit.expand,
+                            children: _cachedTabBodies!,
+                          ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -525,6 +825,7 @@ class _ComplianceOverviewTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(4),
+      cacheExtent: 200,
       children: [
         _AdminPanel(
           compact: true,
@@ -596,7 +897,7 @@ class _RetentionTab extends StatelessWidget {
   final List<Map<String, Object?>> records;
   final List<Map<String, Object?>> policies;
 
-  Color _statusColor(String status) {
+  static Color _statusColor(String status) {
     switch (status) {
       case 'expired':
         return const Color(0xFFDC2626);
@@ -609,72 +910,83 @@ class _RetentionTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(4),
-      children: [
-        _AdminPanel(
-          compact: true,
-          title: 'Retention policies',
-          child: policies.isEmpty
-              ? Text('No policies configured.', style: _AdminDashTheme.label())
-              : Column(
-                  children: [
-                    for (final p in policies)
-                      ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          '${p['document_type']} — ${p['retention_years']} years',
-                          style: _AdminDashTheme.label().copyWith(
-                                color: _AdminDashTheme.textPrimary,
-                                fontSize: 12,
-                              ),
-                        ),
-                        subtitle: Text(
-                          '${p['legal_basis']} · ${p['iso_reference']}',
-                          style: _AdminDashTheme.caption(),
-                        ),
-                      ),
-                  ],
-                ),
+    return CustomScrollView(
+      cacheExtent: 240,
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.all(4),
+          sliver: SliverToBoxAdapter(
+            child: _AdminPanel(
+              compact: true,
+              title: 'Retention policies',
+              child: policies.isEmpty
+                  ? Text('No policies configured.', style: _AdminDashTheme.label())
+                  : Column(
+                      children: [
+                        for (final p in policies)
+                          ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(
+                              '${p['document_type']} — ${p['retention_years']} years',
+                              style: _AdminDashTheme.label().copyWith(
+                                    color: _AdminDashTheme.textPrimary,
+                                    fontSize: 12,
+                                  ),
+                            ),
+                            subtitle: Text(
+                              '${p['legal_basis']} · ${p['iso_reference']}',
+                              style: _AdminDashTheme.caption(),
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
+          ),
         ),
-        const SizedBox(height: _AdminDashTheme.panelGap),
-        _AdminPanel(
-          compact: true,
-          title: 'Records monitoring (${records.length})',
-          child: records.isEmpty
-              ? Text('No documents to monitor.', style: _AdminDashTheme.label())
-              : SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: DataTable(
-                    headingTextStyle: _AdminDashTheme.label(),
-                    dataTextStyle: _AdminDashTheme.caption().copyWith(
-                          color: _AdminDashTheme.textBody,
-                          fontSize: 11,
-                        ),
-                    columns: const [
-                      DataColumn(label: Text('Document')),
-                      DataColumn(label: Text('Type')),
-                      DataColumn(label: Text('Status')),
-                      DataColumn(label: Text('Days left')),
-                      DataColumn(label: Text('Expiry')),
-                    ],
-                    rows: [
-                      for (final r in records)
-                        DataRow(cells: [
-                          DataCell(Text('${r['title']}', overflow: TextOverflow.ellipsis)),
-                          DataCell(Text('${r['document_type'] ?? 'Other'}')),
-                          DataCell(Text(
-                            '${r['status']}',
-                            style: TextStyle(color: _statusColor('${r['status']}')),
-                          )),
-                          DataCell(Text('${r['days_remaining']}')),
-                          DataCell(Text('${(r['expiry_date'] ?? '').toString().split('T').first}')),
-                        ]),
-                    ],
-                  ),
-                ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(4, _AdminDashTheme.panelGap, 4, 4),
+          sliver: SliverToBoxAdapter(
+            child: Text(
+              'Records monitoring (${records.length})',
+              style: _AdminDashTheme.panelTitle(size: 13),
+            ),
+          ),
         ),
+        if (records.isEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            sliver: SliverToBoxAdapter(
+              child: Text(
+                'No documents to monitor.',
+                style: _AdminDashTheme.label(),
+              ),
+            ),
+          ),
+        if (records.isNotEmpty) ...[
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            sliver: SliverToBoxAdapter(child: _ComplianceTableHeader.retention()),
+          ),
+          SliverList.builder(
+            itemCount: records.length,
+            itemBuilder: (context, index) {
+              final r = records[index];
+              final status = '${r['status']}';
+              return _ComplianceTableRow(
+                cells: [
+                  '${r['title']}',
+                  '${r['document_type'] ?? 'Other'}',
+                  status,
+                  '${r['days_remaining']}',
+                  '${(r['expiry_date'] ?? '').toString().split('T').first}',
+                ],
+                accentIndices: {2},
+                accentColor: _statusColor(status),
+              );
+            },
+          ),
+        ],
       ],
     );
   }
@@ -686,36 +998,49 @@ class _AccessRulesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(4),
-      children: [
-        _AdminPanel(
-          compact: true,
-          title: 'Automatic rule-based access',
-          child: rules.isEmpty
-              ? Text('No access rules defined.', style: _AdminDashTheme.label())
-              : DataTable(
-                  headingTextStyle: _AdminDashTheme.label(),
-                  dataTextStyle: _AdminDashTheme.caption().copyWith(
-                        color: _AdminDashTheme.textBody,
-                        fontSize: 11,
-                      ),
-                  columns: const [
-                    DataColumn(label: Text('Role')),
-                    DataColumn(label: Text('Resource')),
-                    DataColumn(label: Text('Action')),
-                    DataColumn(label: Text('Allowed')),
-                  ],
-                  rows: [
-                    for (final r in rules)
-                      DataRow(cells: [
-                        DataCell(Text('${r['role']}')),
-                        DataCell(Text('${r['resource']}')),
-                        DataCell(Text('${r['action']}')),
-                        DataCell(Text((r['allowed'] ?? 0) == 1 ? 'Yes' : 'No')),
-                      ]),
-                  ],
-                ),
+    if (rules.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.all(4),
+        children: [
+          _AdminPanel(
+            compact: true,
+            title: 'Automatic rule-based access',
+            child: Text('No access rules defined.', style: _AdminDashTheme.label()),
+          ),
+        ],
+      );
+    }
+
+    return CustomScrollView(
+      cacheExtent: 200,
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+          sliver: SliverToBoxAdapter(
+            child: Text(
+              'Automatic rule-based access',
+              style: _AdminDashTheme.panelTitle(size: 13),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          sliver: SliverToBoxAdapter(child: _ComplianceTableHeader.accessRules()),
+        ),
+        SliverList.builder(
+          itemCount: rules.length,
+          itemBuilder: (context, index) {
+            final r = rules[index];
+            return _ComplianceTableRow(
+              flex: const [2, 2, 2, 1],
+              cells: [
+                '${r['role']}',
+                '${r['resource']}',
+                '${r['action']}',
+                (r['allowed'] ?? 0) == 1 ? 'Yes' : 'No',
+              ],
+            );
+          },
         ),
       ],
     );
@@ -730,6 +1055,7 @@ class _DuplicatesTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(4),
+      cacheExtent: 200,
       children: [
         if (groups.isEmpty)
           _AdminPanel(
@@ -892,6 +1218,7 @@ class _BackupTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(4),
+      cacheExtent: 200,
       children: [
         if (isAdmin)
           Align(
@@ -1001,6 +1328,7 @@ class _DisposalTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(4),
+      cacheExtent: 200,
       children: [
         _AdminPanel(
           compact: true,
@@ -1100,6 +1428,100 @@ class _IsoTab extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ComplianceTableHeader extends StatelessWidget {
+  const _ComplianceTableHeader({required this.labels, required this.flex});
+
+  final List<String> labels;
+  final List<int> flex;
+
+  factory _ComplianceTableHeader.retention() {
+    return const _ComplianceTableHeader(
+      labels: ['Document', 'Type', 'Status', 'Days left', 'Expiry'],
+      flex: [3, 2, 2, 1, 2],
+    );
+  }
+
+  factory _ComplianceTableHeader.accessRules() {
+    return const _ComplianceTableHeader(
+      labels: ['Role', 'Resource', 'Action', 'Allowed'],
+      flex: [2, 2, 2, 1],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: const BoxDecoration(
+        color: _RecordListTheme.headerBg,
+        border: Border(bottom: BorderSide(color: _RecordListTheme.border)),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < labels.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Expanded(
+              flex: flex[i],
+              child: Text(
+                labels[i],
+                style: _AdminDashTheme.label().copyWith(fontSize: 11),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ComplianceTableRow extends StatelessWidget {
+  const _ComplianceTableRow({
+    required this.cells,
+    this.flex = const [3, 2, 2, 1, 2],
+    this.accentIndices = const {},
+    this.accentColor,
+  });
+
+  final List<String> cells;
+  final List<int> flex;
+  final Set<int> accentIndices;
+  final Color? accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: _RecordListTheme.border)),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < cells.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Expanded(
+              flex: i < flex.length ? flex[i] : 1,
+              child: Text(
+                cells[i],
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: _AdminDashTheme.caption().copyWith(
+                      color: accentIndices.contains(i)
+                          ? accentColor ?? _AdminDashTheme.textBody
+                          : _AdminDashTheme.textBody,
+                      fontSize: 11,
+                      fontWeight: accentIndices.contains(i)
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

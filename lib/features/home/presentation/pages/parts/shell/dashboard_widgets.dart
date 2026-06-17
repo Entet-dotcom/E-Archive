@@ -20,7 +20,6 @@ class _DashboardBaseData {
     this.onViewStudentDocuments,
     this.analytics,
     this.showAnalyticsCharts = false,
-    this.compliance,
   });
 
   final String accountName;
@@ -41,7 +40,6 @@ class _DashboardBaseData {
   final ValueChanged<String>? onViewStudentDocuments;
   final _AnalyticsData? analytics;
   final bool showAnalyticsCharts;
-  final _ComplianceDashboardData? compliance;
 }
 
 /// Header placeholders while the dashboard loads.

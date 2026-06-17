@@ -28,13 +28,6 @@ class _AdminDashboardPage extends StatelessWidget {
                 const SizedBox(height: _AdminDashTheme.sectionGap),
               ],
               _AdminDashboardStatsRow(data: data),
-              if (data.compliance != null) ...[
-                const SizedBox(height: _AdminDashTheme.sectionGap),
-                _AdminDashboardComplianceRow(
-                  data: data,
-                  onNavigate: data.onNavigate,
-                ),
-              ],
               const SizedBox(height: _AdminDashTheme.sectionGap),
               Expanded(child: _AdminDashboardBody(data: data)),
             ],
